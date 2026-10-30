@@ -1,0 +1,158 @@
+trigger:
+  branches:
+    include:
+    - master
+
+pool:
+  name: SarthakChauhanPool
+  demands:
+  - Agent.OS -equals Darwin
+
+variables:
+- name: buildConfiguration
+  value: Release
+
+stages:
+- stage: Build
+  displayName: ApplicationBuild
+  jobs:
+  - job: Build
+    variables:
+    - name: continueOnError
+      value: false
+    steps:
+    # Windows-only tasks (VSBuild, VSTest, NuGetCommand) replaced with dotnet CLI for macOS
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        version: '8.x'
+        performMultiLevelLookup: true
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+        feedsToUse: 'select'
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: build
+        projects: '**/*.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-restore'
+
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: publish
+        publishWebProjects: true
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+        zipAfterPublish: true
+        modifyOutputPath: false
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: $(Build.ArtifactStagingDirectory)
+        ArtifactName: drop
+        publishLocation: Container
+
+- stage: Test
+  displayName: UnitTest
+  jobs:
+  - job: Test
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: sdk
+        version: '8.x'
+
+    # VSTest@2 is Windows-only; DotNetCoreCLI test works on macOS
+    - task: DotNetCoreCLI@2
+      inputs:
+        command: test
+        projects: '**/*[Tt]est*.csproj'
+        arguments: '--configuration $(buildConfiguration) --no-build'
+
+- stage: deploy_dev
+  displayName: ApplicationDeplo
+  jobs:
+  - job: dev
+    steps:
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: current
+        downloadType: single
+        artifactName: drop
+        downloadPath: $(System.DefaultWorkingDirectory)
+    - task: AzureRmWebAppDeployment@4
+      inputs:
+        ConnectionType: AzureRM
+        azureSubscription: '$(connectedservicename)'
+        appType: webApp
+        WebAppName: '$(app_name)'
+        packageForLinux: $(System.DefaultWorkingDirectory)/drop/*.zip
+
+- stage: functionaltest_dev
+  displayName: FunctionalTest
+  jobs:
+  - job: FunctionalTesting
+    steps:
+    - task: CmdLine@2
+      inputs:
+        script: echo "function testing"
+
+- stage: deploy_staging
+  displayName: staging
+  jobs:
+  - job: staging
+    condition: and(succeeded(), eq(variables['deploy_staging'], 'yes'))
+    steps:
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: current
+        downloadType: single
+        artifactName: drop
+        downloadPath: $(System.DefaultWorkingDirectory)
+    - task: AzureRmWebAppDeployment@4
+      inputs:
+        ConnectionType: AzureRM
+        azureSubscription: '$(connectedservicename)'
+        appType: webApp
+        WebAppName: $(staging_app)
+        packageForLinux: $(System.DefaultWorkingDirectory)/drop/*.zip
+
+- stage: functionaltest_staging
+  displayName: FunctionalTestStaging
+  jobs:
+  - job: FunctionalTesting
+    steps:
+    - task: CmdLine@2
+      inputs:
+        script: echo "function testing"
+
+- stage: deploy_prod
+  displayName: DeployToProd
+  jobs:
+  - job: prod
+    condition: and(succeeded(), eq(variables['deploy_prod'], 'yes'))
+    steps:
+    - task: DownloadBuildArtifacts@0
+      inputs:
+        buildType: current
+        downloadType: single
+        artifactName: drop
+        downloadPath: $(System.DefaultWorkingDirectory)
+    - task: AzureRmWebAppDeployment@4
+      inputs:
+        ConnectionType: AzureRM
+        azureSubscription: '$(connectedservicename)'
+        appType: webApp
+        WebAppName: $(prod_app)
+        packageForLinux: $(System.DefaultWorkingDirectory)/drop/*.zip
+
+- stage: functionaltest_prod
+  displayName: FunctionalTestingProd
+  jobs:
+  - job: FunctionalTesting
+    steps:
+    - task: CmdLine@2
+      inputs:
+        script: echo "function testing"
